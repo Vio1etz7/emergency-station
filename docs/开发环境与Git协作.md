@@ -1,7 +1,5 @@
 # 开发环境与 Git 协作说明
 
-> 给组员看的操作手册。照着做，不用理解原理也能跑通。
-> 遇到本文档没写的情况，先截图发群里，别自己乱试。
 
 ---
 
@@ -48,20 +46,20 @@
 打开 Ubuntu 终端（`Ctrl+Alt+T`），逐条执行，**把引号里的内容换成自己的**：
 
 ```bash
-git config --global user.name  "段卓然"
-git config --global user.email "你的GitHub注册邮箱"
+git config --global user.name  "名字"
+git config --global user.email "1732115984@qq.com"
 git config --global core.autocrlf input
 git config --global pull.rebase false
 ```
 
 四条命令的作用：
 
-| 命令 | 作用 | 不设会怎样 |
-|---|---|---|
-| `user.name` | 提交记录里显示的名字 | 提交人显示成一串乱码 |
-| `user.email` | 关联到 GitHub 账号 | 提交不算在你头上，贡献统计为空 |
-| `core.autocrlf input` | 不自动改换行符 | Windows/Linux 来回倒腾后整个文件"全变了"，diff 没法看 |
-| `pull.rebase false` | pull 时用合并而不是变基 | 新手用 rebase 容易把历史搞乱 |
+| 命令 | 作用 | 
+|---|---|
+| `user.name` | 提交记录里显示的名字 | 
+| `user.email` | 关联到 GitHub 账号 |
+| `core.autocrlf input` | 不自动改换行符 | 
+| `pull.rebase false` | pull 时用合并而不是变基 | 
 
 验证：
 
@@ -103,7 +101,7 @@ OpenHarmony 工程已经在 `~/project/bearpi-hm_nano`，而且**能编译通过
 ```bash
 cd ~/project/bearpi-hm_nano/applications/BearPi/BearPi-HM_Nano/sample
 
-git clone https://github.com/段卓然的用户名/emergency-station.git
+git clone https://github.com/Vio1etz7/emergency-station
 ```
 
 **为什么必须放这儿？** 因为 `BUILD.gn` 里写的是相对路径：
@@ -140,21 +138,21 @@ git pull
 # 1. 进仓库
 cd ~/project/bearpi-hm_nano/applications/BearPi/BearPi-HM_nano/sample/emergency-station
 
-# 2. 拉最新代码（重要，别跳过）
+# 2. 拉最新代码
 git pull
 
-# 3. 改代码 —— 只改自己那个目录
+# 3. 改代码 
 #    cd E1_yizhan_node / E3_ir_node / E4_box_node ...
 
 # 4. 编译（在工程根目录）
 cd ~/project/bearpi-hm_nano
 python build.py BearPi-HM_Nano
-#    看到 BUILD SUCCESS 才算过
+
 
 # 5. 提交并推送
 cd applications/BearPi/BearPi-HM_nano/sample/emergency-station
 git status                    # 确认只改了自己的文件
-git add .                     # 或者 git add E3_ir_node（更精确）
+git add .                     # 或者 git add 
 git commit -m "feat(ir): 完成红外检测与上报"
 git push
 ```
@@ -174,7 +172,6 @@ git push
 
 模块名用节点代号：`gw`（主控）、`lamp`、`ir`、`box`、`repo`。
 
-**别写"更新""修改""1"这种**——一周后你自己都看不懂改了什么。
 
 ---
 
@@ -223,36 +220,8 @@ git push
 
 ---
 
-## 九、推不上去怎么办（代理）
 
-如果 `git push` 卡在 `Enumerating objects` 十几分钟不动：
-
-```bash
-# 先试这条路（假设 Clash 端口是 7890）
-git config --global http.proxy  http://192.168.142.1:7890
-git config --global https.proxy http://192.168.142.1:7890
-```
-
-前提：Clash 里打开了 **"允许局域网连接"**。
-
-验证是否生效：
-
-```bash
-curl -sI https://github.com | head -1
-```
-
-出现 `HTTP/2 200` 或 `301` 就是通的。
-
-**不想要代理了**（比如回学校用校园网）：
-
-```bash
-git config --global --unset http.proxy
-git config --global --unset https.proxy
-```
-
----
-
-## 十、常见报错对照表
+## 九、常见报错对照表
 
 | 报错 | 原因 | 怎么办 |
 |---|---|---|
@@ -267,7 +236,7 @@ git config --global --unset https.proxy
 
 ---
 
-## 十一、绝对不要做的事
+## 十、绝对不要做的事
 
 1. **不要在 `sample/` 目录里 `git add .`** ——那是小熊派官方仓库，几万个文件，推不上去还会把环境搞乱
 2. **不要提交 `out/`、`*.bin`、`*.o`** ——几百 MB，GitHub 会拒收（`.gitignore` 已挡住，但别手动 `git add -f`）
