@@ -1,0 +1,22 @@
+# 编译产物（动辄几个 G，绝不进仓库）
+out/
+build/
+*.o
+*.a
+*.so
+*.bin
+*.out
+*.map
+*.hex
+
+# 编辑器 / 系统垃圾
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 日志与临时文件
+*.log
+*.tmp
+~$*
