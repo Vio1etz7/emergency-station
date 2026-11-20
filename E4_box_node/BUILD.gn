@@ -1,0 +1,24 @@
+static_library("box_node") {
+    sources = [
+        "box_node.c", "src/box_logic.c", "src/box_hardware.c", "src/box_wifi.c",
+        "src/nfc/NT3H.c",
+        "src/nfc/nfc.c",
+        "src/nfc/ndef/ndef.c",
+        "src/nfc/ndef/rtd/nfcForum.c",
+        "src/nfc/ndef/rtd/rtdText.c",
+        "src/nfc/ndef/rtd/rtdUri.c",
+    ]
+    # Same warning options as the official B5 driver target.
+    cflags = [ "-Wno-unused-variable", "-Wno-unused-but-set-variable", "-Wno-unused-parameter" ]
+    include_dirs = [
+        "include",
+        "src/nfc",
+        "src/nfc/ndef",
+        "src/nfc/ndef/rtd",
+        "//utils/native/lite/include",
+        "//kernel/liteos_m/components/cmsis/2.0",
+        "//base/iot_hardware/interfaces/kits/wifiiot_lite",
+        "//foundation/communication/interfaces/kits/wifi_lite/wifiservice",
+        "//vendor/hisi/hi3861/hi3861/third_party/lwip_sack/include",
+    ]
+}
