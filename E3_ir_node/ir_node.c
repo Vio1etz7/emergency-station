@@ -41,7 +41,7 @@
  * ======================================================= */
 #define WIFI_SSID       "Vio1etz"
 #define WIFI_PASSWORD   "12345678"
-#define GATEWAY_IP      "192.168.43.234"
+#define GATEWAY_IP      "192.168.43.131"
 #define GATEWAY_PORT    8888            /* 主控收数据的端口，四块板统一 */
 #define LOCAL_PORT      8891            /* 本机收命令的端口，红外板固定 8891 */
 

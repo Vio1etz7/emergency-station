@@ -14,7 +14,7 @@
 #define BOX_GPS_FIX_NOTICE 1
 #define BOX_GPS_FIX_CONFIRM_MS 3000
 #define BOX_GPS_FIX_PULSE_MS 150
-#define BOX_MOVE_THRESHOLD_METERS 5.0
+#define BOX_MOVE_THRESHOLD_METERS 20.0   /* 民用 GPS 静止漂移 3~10 米，5 米会一直误报 */
 #define BOX_MOVE_BUZZ_MS 3000
 /* Movement samples are taken at most once per second. */
 #define BOX_MOVE_SAMPLE_MS 1000

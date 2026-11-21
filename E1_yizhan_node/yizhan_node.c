@@ -51,6 +51,8 @@
 #define MANUAL_HOLD     3000        /* 手动模式保持 3000 tick = 30 秒 */
 #define LIGHT_HOLD      3000        /* 有人走后，灯再亮 30 秒 */
 #define ALARM_HOLD      1000        /* 包裹告警保持 10 秒，之后自动解除 */
+#define BOX_MOVE_METERS 20.0        /* 物资偏离基准点多少米算异常（与 E4 阈值保持一致） */
+#define BOX_FIX_LOST    3000        /* 3000 tick = 30 秒收不到有效定位算异常 */
 #define NODE_TIMEOUT    1500        /* 1500 tick = 15 秒没消息算掉线 */
 #define MAX_NODES       4
 
@@ -106,7 +108,12 @@ static volatile uint32_t g_manual_until = 0;
 static NodeInfo_t g_nodes[MAX_NODES];
 static float g_lamp_lux    = -1.0f;   /* 路灯报上来的光照，-1 表示还不知道 */
 static int   g_ir_present = 0;      /* 红外：有人 = 1 */
-static int   g_box_alarm  = 0;      /* 物流：倾斜/震动 */
+static int   g_box_alarm  = 0;      /* 物流：偏离基准点 / 定位丢失 */
+static int32_t  g_box_base_lat = 0;             /* 基准点纬度（E6 定点） */
+static int32_t  g_box_base_lon = 0;             /* 基准点经度（E6 定点） */
+static int      g_box_base_set = 0;             /* 基准点是否已记录 */
+static uint32_t g_box_fix_lost_since = 0;       /* 从什么时候开始收不到有效定位 */
+static double   g_box_last_dist = 0.0;          /* 最近一次算出的偏离距离，仅用于打印 */
 static volatile uint32_t g_box_alarm_until = 0;   /* 告警什么时候自动解除 */
 static int   g_buzz_on    = 0;      /* 当前是否已让物流节点蜂鸣 */
 static int   g_light_req  = 0;      /* 是否已经让路灯开灯 */
@@ -298,11 +305,12 @@ static void ReportTask(void *arg)
         printf("[GW] T=%.1fC H=%.1f%% L=%.0flux FAN=%d LED=%d NET=%s\r\n",
                m.temp, m.humi, m.lux, g_motor_on, g_light_on,
                g_net_ok ? "UP" : "DOWN");
-        printf("[GW]    红外=%s  路灯照明=%.0flux  节点在线=%d/3  BOX=%s  last=%s\r\n",
+        printf("[GW]    红外=%s  路灯照明=%.0flux  节点在线=%d/3  BOX=%s(%.0fm) last=%s\r\n",
                g_ir_present ? "有人" : "无人",
                g_lamp_lux,
                online,
                g_box_alarm ? "告警" : "正常",
+               g_box_last_dist,
                g_last_cmd);
         osMutexRelease(g_lock);
 
@@ -359,6 +367,59 @@ static void NetTask(void *arg)
     while (1) {
         osDelay(500);
     }
+}
+
+/* 两个 GPS 坐标之间的直线距离（米）。
+ * 局部平面近似：纬度差直接换算成米，经度差再乘 cos(平均纬度)。
+ * 不用 libm 的 cos/sqrt —— Hi3861 链接器不继承数学库（E4 也是这么绕开的）。 */
+static double GwDistanceMeters(int32_t lat1, int32_t lon1, int32_t lat2, int32_t lon2)
+{
+    const double rad_per_e6 = 3.14159265358979323846 / 180000000.0;   /* E6 定点 -> 弧度 */
+    const double earth_m = 6371000.0;
+    double mean_lat = ((double)lat1 + (double)lat2) * 0.5 * rad_per_e6;
+    double squared = mean_lat * mean_lat;
+    double term = 1.0;
+    double cosine = 1.0;
+    double north;
+    double east;
+    double scale;
+    double a;
+    double b;
+    double sum;
+    double root;
+    int i;
+
+    /* cos 的泰勒展开，校园尺度（±90°内）够用，最多 8 项 */
+    for (i = 1; i <= 8; i++) {
+        term *= -squared / ((double)(2 * i - 1) * (double)(2 * i));
+        cosine += term;
+    }
+    if (cosine < 0.0) {
+        cosine = 0.0;
+    }
+
+    north = ((double)lat2 - (double)lat1) * rad_per_e6 * earth_m;
+    east  = ((double)lon2 - (double)lon1) * rad_per_e6 * earth_m * cosine;
+    if (north < 0.0) {
+        north = -north;
+    }
+    if (east < 0.0) {
+        east = -east;
+    }
+
+    scale = (north > east) ? north : east;
+    if (scale == 0.0) {
+        return 0.0;
+    }
+    /* 先归一化再用牛顿迭代开方，结果与位移大小无关 */
+    a = north / scale;
+    b = east / scale;
+    sum = a * a + b * b;
+    root = 1.0;
+    for (i = 0; i < 8; i++) {
+        root = 0.5 * (root + sum / root);
+    }
+    return scale * root;
 }
 
 /* ---------------- 任务 5：收节点报文，立刻按规则反应 ---------------- */
@@ -439,29 +500,72 @@ static void GwTask(void *arg)
             }
         }
 
-        /* ---------- 规则 2：物流报倾斜/震动 -> 现场蜂鸣 ---------- */
+        /* ---------- 规则 2：物资偏离基准点 / 定位丢失 -> 现场蜂鸣 ---------- */
         if (strcmp(name, "BOX") == 0) {
-            int t = 0;
-            int s = 0;
-            if (GetField(buf, "T", val, sizeof(val))) {
-                t = atoi(val);
+            int fix = 0;
+            int32_t lat = 0;
+            int32_t lon = 0;
+            double dist = 0.0;
+
+            if (GetField(buf, "FIX", val, sizeof(val))) {
+                fix = atoi(val);
             }
-            if (GetField(buf, "S", val, sizeof(val))) {
-                s = atoi(val);
+            if (GetField(buf, "LAT_E6", val, sizeof(val))) {
+                lat = (int32_t)atol(val);
             }
-            if ((t == 1) || (s == 1)) {
-                g_box_alarm = 1;
-                g_box_alarm_until = now + ALARM_HOLD;   /* 10 秒后自动解除 */
-                g_light_until = now + LIGHT_HOLD;
-                printf("[RULE] 包裹异常(T=%d,S=%d) -> 蜂鸣 + 路灯常亮\r\n", t, s);
-                if (g_buzz_on == 0) {
-                    if (SendCmdTo("BOX", "CMD=BUZZ,ON=1") == 0) {
-                        g_buzz_on = 1;
+            if (GetField(buf, "LON_E6", val, sizeof(val))) {
+                lon = (int32_t)atol(val);
+            }
+
+            if ((fix == 1) && (lat != 0) && (lon != 0)) {
+                g_box_fix_lost_since = 0;       /* 定位恢复了 */
+
+                if (g_box_base_set == 0) {
+                    /* 第一次拿到有效定位，就地记为基准点 */
+                    g_box_base_lat = lat;
+                    g_box_base_lon = lon;
+                    g_box_base_set = 1;
+                    printf("[RULE] 物资基准点已记录 LAT_E6=%d LON_E6=%d\r\n",
+                           (int)lat, (int)lon);
+                } else {
+                    dist = GwDistanceMeters(g_box_base_lat, g_box_base_lon, lat, lon);
+                    g_box_last_dist = dist;
+                    if (dist > BOX_MOVE_METERS) {
+                        if (g_box_alarm == 0) {
+                            /* 只在 正常->告警 这一刻打印，之后每秒只会续期，不刷屏 */
+                            printf("[RULE] 物资偏离基准点 %.0f 米（阈值 %.0f）-> 蜂鸣 + 路灯常亮\r\n",
+                                   dist, BOX_MOVE_METERS);
+                        }
+                        g_box_alarm = 1;
+                        g_box_alarm_until = now + ALARM_HOLD;   /* 每秒一条，超阈值就自动续期 */
+                        g_light_until = now + LIGHT_HOLD;
+                        if (g_buzz_on == 0) {
+                            if (SendCmdTo("BOX", "CMD=BUZZ,ON=1") == 0) {
+                                g_buzz_on = 1;
+                            }
+                        }
+                        if (g_light_req == 0) {
+                            if (SendCmdTo("LAMP", "CMD=LIGHT,LED=1") == 0) {
+                                g_light_req = 1;
+                            }
+                        }
                     }
                 }
-                if (g_light_req == 0) {
-                    if (SendCmdTo("LAMP", "CMD=LIGHT,LED=1") == 0) {
-                        g_light_req = 1;
+            } else if (g_box_base_set == 1) {
+                /* 拿不到有效定位（室内、冷启动、被遮挡）：连续 30 秒才算异常，
+                 * 避免刚上电时的正常无信号被误判 */
+                if (g_box_fix_lost_since == 0) {
+                    g_box_fix_lost_since = now;
+                } else if ((now - g_box_fix_lost_since) > BOX_FIX_LOST) {
+                    if (g_box_alarm == 0) {
+                        printf("[RULE] 物资定位丢失超过 30 秒 -> 告警\r\n");
+                    }
+                    g_box_alarm = 1;
+                    g_box_alarm_until = now + ALARM_HOLD;
+                    if (g_buzz_on == 0) {
+                        if (SendCmdTo("BOX", "CMD=BUZZ,ON=1") == 0) {
+                            g_buzz_on = 1;
+                        }
                     }
                 }
             }
@@ -489,10 +593,10 @@ static void RuleTask(void *arg)
             g_light_req = 0;
         }
 
-        /* 规则 2 的收尾：包裹告警满 10 秒自动解除，状态回到正常 */
+        /* 规则 2 的收尾：物资告警满 10 秒自动解除，状态回到正常 */
         if ((g_box_alarm == 1) && (now >= g_box_alarm_until)) {
             g_box_alarm = 0;
-            printf("[RULE] 包裹告警解除，状态恢复正常\r\n");
+            printf("[RULE] 物资告警解除（已回到基准点附近或定位恢复），状态恢复正常\r\n");
             if (g_buzz_on == 1) {
                 SendCmdTo("BOX", "CMD=BUZZ,ON=0");
                 g_buzz_on = 0;
@@ -554,7 +658,14 @@ static void CmdTask(void *arg)
         printf("[CMD] %s:%d => %s\r\n",
                inet_ntoa(from.sin_addr), ntohs(from.sin_port), buf);
 
-        if (strstr(buf, "LED=1") != NULL) {
+        if (strstr(buf, "BASE") != NULL) {
+            /* 换了场地 / 重启过物资板之后，用 BASE 清掉旧基准点 */
+            g_box_base_set = 0;
+            g_box_alarm = 0;
+            g_box_fix_lost_since = 0;
+            g_box_last_dist = 0.0;
+            printf("[CMD] 基准点已清除，等下一个有效定位重新记录\r\n");
+        } else if (strstr(buf, "LED=1") != NULL) {
             Light_StatusSet(ON);
             g_light_on = 1;
         } else if (strstr(buf, "LED=0") != NULL) {
