@@ -4,6 +4,7 @@ static_library("ir_node") {
         "ir_node.c",
         "src/E53_IS1.c",
         "src/ir_debounce.c",
+        "src/local_led.c",
         "src/wifi_connect.c",
     ]
 
