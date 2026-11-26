@@ -450,6 +450,46 @@ static void GwTask(void *arg)
         }
         buf[n] = 0;
 
+        /* ---------- 组网发现：节点广播 WHO=GW 来找网关 ----------
+         * 子节点不知道网关 IP，就向 255.255.255.255:8888 广播一句 WHO=GW。
+         * 网关收到后回一条 GWA=<本机IP>,<端口>，节点从回包里直接取源地址。
+         * 这类报文不进节点表，也不参与规则判断。 */
+        if (strncmp(buf, "WHO=GW", 6) == 0) {
+            struct sockaddr_in me;
+            socklen_t me_len = sizeof(me);
+            int probe;
+            char reply[48];
+            char peer_str[16];
+            char me_str[16];
+            int rn;
+
+            memset(&me, 0, sizeof(me));
+            /* 直接 getsockname 拿到的是 0.0.0.0（bind 时用的 INADDR_ANY），
+             * 所以借一个临时 socket 连一下对端，再看自己被分配到哪个地址。 */
+            probe = socket(AF_INET, SOCK_DGRAM, 0);
+            if (probe >= 0) {
+                if (connect(probe, (struct sockaddr *)&from, from_len) == 0) {
+                    me_len = sizeof(me);
+                    getsockname(probe, (struct sockaddr *)&me, &me_len);
+                }
+                closesocket(probe);   /* lwIP 的 socket 不是 fd，没有 close() */
+            }
+            /* 注意：inet_ntoa 返回的是静态缓冲区，同一个 printf 里调两次，
+             * 两个参数会指向同一块内存，打印出来是两个相同的地址。
+             * 所以先各自拷到局部数组里再用。 */
+            strncpy(peer_str, inet_ntoa(from.sin_addr), sizeof(peer_str) - 1);
+            peer_str[sizeof(peer_str) - 1] = 0;
+            strncpy(me_str, inet_ntoa(me.sin_addr), sizeof(me_str) - 1);
+            me_str[sizeof(me_str) - 1] = 0;
+
+            rn = snprintf(reply, sizeof(reply), "GWA=%s,%d\r\n",
+                          me_str, GW_DATA_PORT);
+            sendto(g_node_fd, reply, rn, 0, (struct sockaddr *)&from, from_len);
+            printf("[GW] 发现请求 <- %s:%d，已回复 GWA=%s\r\n",
+                   peer_str, ntohs(from.sin_port), me_str);
+            continue;
+        }
+
         GetNodeName(buf, name, sizeof(name));
         if (name[0] == 0) {
             printf("[GW] 看不懂的报文: %s\r\n", buf);
